@@ -1,0 +1,16 @@
+[
+{
+  "modid": "turtle",
+  "name": "Trotuman",
+  "description": "The Trotuman mod made for youtube.com/user/TheWillyrex",
+  "version": "1.7.2",
+  "mcversion": "1.7.2",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Noppes"],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]
