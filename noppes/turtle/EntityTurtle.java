@@ -1,5 +1,8 @@
 package noppes.turtle;
 
+import io.netty.buffer.ByteBuf;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,12 +25,17 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.projectile.EntityArrow;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
+import net.minecraft.inventory.InventoryBasic;
 import net.minecraft.item.EnumAction;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemArmor;
 import net.minecraft.item.ItemPickaxe;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemSword;
+import net.minecraft.nbt.CompressedStreamTools;
+import net.minecraft.nbt.NBTSizeTracker;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.nbt.NBTTagList;
 import net.minecraft.pathfinding.PathEntity;
 import net.minecraft.util.DamageSource;
 import net.minecraft.util.MathHelper;
@@ -35,8 +43,9 @@ import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import noppes.turtle.ai.EntityAITurtleAttackOnCollide;
 import noppes.turtle.ai.EntityAITurtleWander;
+import cpw.mods.fml.common.registry.IEntityAdditionalSpawnData;
 
-public class EntityTurtle extends EntityTameable {
+public class EntityTurtle extends EntityTameable implements IEntityAdditionalSpawnData{
 	
 	private final static int MaxMiningTime = 300000;
 	
@@ -46,6 +55,9 @@ public class EntityTurtle extends EntityTameable {
 	public boolean finishedMining = false;
 	private boolean wasMining = false;
 	private final static HashMap<Item, Object[]> mined;
+
+	public InventoryBasic inventory = new InventoryBasic("Trotuman", true, 13);
+	public InventoryBasic armor = new InventoryBasic("TrotumanArmor", true, 4);
 	
 	static{
 		mined = new HashMap<Item, Object[]>();
@@ -60,7 +72,7 @@ public class EntityTurtle extends EntityTameable {
 		super(par1World);
         this.tasks.addTask(1, new EntityAISwimming(this));
         this.tasks.addTask(2, this.aiSit);
-        this.tasks.addTask(4, new EntityAITurtleAttackOnCollide(this, 1.0D, true));
+        this.tasks.addTask(4, new EntityAITurtleAttackOnCollide(this, 1.4D, true));
         this.tasks.addTask(5, new EntityAIFollowOwner(this, 1.0D, 5.0F, 2.0F));
         this.tasks.addTask(7, new EntityAITurtleWander(this, 1.0D));
         this.tasks.addTask(9, new EntityAIWatchClosest(this, EntityPlayer.class, 8.0F));
@@ -72,13 +84,14 @@ public class EntityTurtle extends EntityTameable {
 
         this.setTamed(false);
         
-        setSize(0.8f, 1.8f);
+        setSize(0.6f, 1.3f);
 	}
 	
 	@Override
 	public boolean attackEntityFrom(DamageSource damagesource, float i) {
 		if(isMining())
 			return false;
+		System.out.println(i);
 		Entity entity = damagesource.getEntity();
 		if(entity instanceof EntityArrow)
 			entity = ((EntityArrow)entity).shootingEntity;
@@ -95,7 +108,6 @@ public class EntityTurtle extends EntityTameable {
     		super.updateAITasks();
     		EntityPlayer owner = (EntityPlayer)getOwner();
     		double distance = owner.getDistanceToEntity(this);
-    		System.out.println(distance);
     		if(distance < 14 && isSitting()){
     			setTurtleSitting(false);
     			getNavigator().tryMoveToEntityLiving(owner, 1);
@@ -104,7 +116,10 @@ public class EntityTurtle extends EntityTameable {
     			finishedMining = false;
     			setTurtleSitting(false);
     			
-    			Object[] items = mined.get(this.getHeldItem().getItem());
+    			Object[] items = null;
+    			if(this.getHeldItem() != null)
+    				items = mined.get(this.getHeldItem().getItem());
+    			
     			if(items == null)
     				items = mined.get(Items.golden_pickaxe);
     			List<ItemStack> list = new ArrayList<ItemStack>();
@@ -164,7 +179,25 @@ public class EntityTurtle extends EntityTameable {
     }
     
     public void setHeldItem(ItemStack item){
+    	inventory.setInventorySlotContents(0, item);
     	dataWatcher.updateObject(19, item);
+    	if(item == null)
+    		return;
+		if(item.getItem() == Items.fish){
+			eatingTicks = 80;
+			wasSitting = isSitting();
+			if(!wasSitting)
+				setTurtleSitting(true);
+		}
+		if(item.getItem() instanceof ItemPickaxe){
+			setTurtleSitting(true);
+			mineTimer = System.currentTimeMillis();
+		}
+    }
+    
+    @Override
+    public ItemStack func_130225_q(int slot){
+        return this.armor.getStackInSlot(slot);
     }
     
     public boolean isMining(){
@@ -180,8 +213,21 @@ public class EntityTurtle extends EntityTameable {
         super.writeEntityToNBT(compound);
         compound.setBoolean("FinishedMining", finishedMining);
         compound.setLong("MiningTimer", mineTimer);
-        if(getHeldItem() != null)
-        	compound.setTag("HeldItem",getHeldItem().writeToNBT(new NBTTagCompound()));
+        
+        NBTTagList list = new NBTTagList();
+        for(int i = 0; i < inventory.getSizeInventory(); i++){
+        	NBTTagCompound comp = new NBTTagCompound();
+        	ItemStack item = inventory.getStackInSlot(i);
+        	if(item == null)
+        		continue;
+        	comp.setInteger("Slot", i);
+        	comp.setTag("Item", item.writeToNBT(new NBTTagCompound()));
+        	list.appendTag(comp);
+        }
+        
+        compound.setTag("TurtleInvetory", list);
+        
+        compound.setTag("TurtleArmor", getArmorNBT());
     }
 
 	@Override
@@ -190,7 +236,41 @@ public class EntityTurtle extends EntityTameable {
         mineTimer = compound.getLong("MiningTimer");
         finishedMining = compound.getBoolean("FinishedMining");
         setHeldItem(ItemStack.loadItemStackFromNBT(compound.getCompoundTag("HeldItem")));
+        
+        NBTTagList list = compound.getTagList("TurtleInvetory", 10);
+        for(int i = 0; i < list.tagCount(); i++){
+        	NBTTagCompound comp = list.getCompoundTagAt(i);
+        	int slot = comp.getInteger("Slot");
+        	ItemStack item = ItemStack.loadItemStackFromNBT(comp.getCompoundTag("Item"));
+        	inventory.setInventorySlotContents(slot, item);
+        }
+        setHeldItem(inventory.getStackInSlot(0));
+
+        setArmorNBT(compound.getTagList("TurtleArmor", 10));
     }
+	
+	private NBTTagList getArmorNBT(){
+		NBTTagList list = new NBTTagList();
+        for(int i = 0; i < armor.getSizeInventory(); i++){
+        	NBTTagCompound comp = new NBTTagCompound();
+        	ItemStack item = armor.getStackInSlot(i);
+        	if(item == null)
+        		continue;
+        	comp.setInteger("Slot", i);
+        	comp.setTag("Item", item.writeToNBT(new NBTTagCompound()));
+        	list.appendTag(comp);
+        }
+        return list;
+	}
+	
+	private void setArmorNBT(NBTTagList list){
+        for(int i = 0; i < list.tagCount(); i++){
+        	NBTTagCompound comp = list.getCompoundTagAt(i);
+        	int slot = comp.getInteger("Slot");
+        	ItemStack item = ItemStack.loadItemStackFromNBT(comp.getCompoundTag("Item"));
+        	armor.setInventorySlotContents(slot, item);
+        }
+	}
 
 	@Override
 	protected void applyEntityAttributes() {
@@ -198,11 +278,12 @@ public class EntityTurtle extends EntityTameable {
 		this.getEntityAttribute(SharedMonsterAttributes.movementSpeed).setBaseValue(0.3);
 
 		if (this.isTamed())
-			this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(40.0D);
+			this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(50.0D);
 		else 
 			this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(8.0D);
 		
 	}
+	
 	@Override
     public void onLivingUpdate(){
         this.updateArmSwingProgress();
@@ -220,24 +301,24 @@ public class EntityTurtle extends EntityTameable {
         		spawnExplosionParticle();
         }
         
-        ItemStack par1ItemStack = this.getHeldItem();
-        if (par1ItemStack != null && par1ItemStack.getItemUseAction() == EnumAction.eat)
+        ItemStack item = this.getHeldItem();
+        if (item != null && item.getItemUseAction() == EnumAction.eat && item.getItem() == Items.fish)
         {
         	if(worldObj.isRemote){
 	            for (int j = 0; j < 2; ++j)
 	            {
-	                Vec3 vec3 = this.worldObj.getWorldVec3Pool().getVecFromPool(((double)this.rand.nextFloat() - 0.5D) * 0.1D, Math.random() * 0.1D + 0.1D, 0.0D);
+	                Vec3 vec3 = Vec3.createVectorHelper(((double)this.rand.nextFloat() - 0.5D) * 0.1D, Math.random() * 0.1D + 0.1D, 0.0D);
 	                vec3.rotateAroundX(-this.rotationPitch * (float)Math.PI / 180.0F);
 	                vec3.rotateAroundY(-this.renderYawOffset * (float)Math.PI / 180.0F);
-	                Vec3 vec31 = this.worldObj.getWorldVec3Pool().getVecFromPool(((double)this.rand.nextFloat() - 0.5D) * 0.3D, (double)(-this.rand.nextFloat()) * 0.6D - 0.3D, 0.6D);
+	                Vec3 vec31 = Vec3.createVectorHelper(((double)this.rand.nextFloat() - 0.5D) * 0.3D, (double)(-this.rand.nextFloat()) * 0.6D - 0.3D, 0.6D);
 	                vec31.rotateAroundX(-this.rotationPitch * (float)Math.PI / 180.0F);
 	                vec31.rotateAroundY(-this.renderYawOffset * (float)Math.PI / 180.0F);
 	                vec31 = vec31.addVector(this.posX, this.posY + (double)this.getEyeHeight(), this.posZ);
-	                String s = "iconcrack_" + Item.getIdFromItem(par1ItemStack.getItem());
+	                String s = "iconcrack_" + Item.getIdFromItem(item.getItem());
 	
-	                if (par1ItemStack.getHasSubtypes())
+	                if (item.getHasSubtypes())
 	                {
-	                    s = s + "_" + par1ItemStack.getItemDamage();
+	                    s = s + "_" + item.getItemDamage();
 	                }
 	
 	                this.worldObj.spawnParticle(s, vec31.xCoord, vec31.yCoord, vec31.zCoord, vec3.xCoord, vec3.yCoord + 0.0D, vec3.zCoord);
@@ -251,7 +332,7 @@ public class EntityTurtle extends EntityTameable {
         			playSound("random.burp", 0.5F, this.rand.nextFloat() * 0.1F + 0.9F);
         			setHeldItem(null);
         			setTurtleSitting(wasSitting);
-        			setHealth(40);
+        			this.heal(20);
         		}
         		else if(eatingTicks % 6 == 0)
             		this.playSound("random.eat", 0.5F + 0.5F * (float)this.rand.nextInt(2), (this.rand.nextFloat() - this.rand.nextFloat()) * 0.2F + 1.0F);
@@ -264,16 +345,12 @@ public class EntityTurtle extends EntityTameable {
         super.setTamed(par1);
 
         if (par1)
-            this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(40.0D);
+            this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(50.0D);
         else
             this.getEntityAttribute(SharedMonsterAttributes.maxHealth).setBaseValue(8.0D);
         
     }
-
-    public void swingItem()
-    {
-    	super.swingItem();
-    }
+    
 	@Override
     public boolean attackEntityAsMob(Entity par1Entity){
 		this.swingItem();
@@ -285,6 +362,54 @@ public class EntityTurtle extends EntityTameable {
 			i += ((ItemSword)item.getItem()).func_150931_i();
 		}
         return par1Entity.attackEntityFrom(DamageSource.causeMobDamage(this), (float)i);
+    }
+	
+	@Override
+    public int getTotalArmorValue(){
+        int total = 0;
+
+        for (int i = 0; i < this.armor.getSizeInventory(); ++i){
+        	ItemStack stack = armor.getStackInSlot(i);
+            if (stack != null && stack.getItem() instanceof ItemArmor){
+                total += ((ItemArmor)stack.getItem()).damageReduceAmount;
+            }
+        }
+
+        return total;
+    }
+	
+	@Override
+    protected void dropFewItems(boolean p_70628_1_, int p_70628_2_){
+        for (int i = 0; i < this.armor.getSizeInventory(); ++i){
+        	ItemStack stack = armor.getStackInSlot(i);
+        	if(stack != null)
+        		entityDropItem(stack, 0);
+        }
+        for (int i = 0; i < this.inventory.getSizeInventory(); ++i){
+        	ItemStack stack = inventory.getStackInSlot(i);
+        	if(stack != null)
+        		entityDropItem(stack, 0);
+        }
+    }
+	
+	@Override
+    protected void damageArmor(float damage){
+		damage /= 4.0F;
+
+        if (damage < 1.0F){
+        	damage = 1.0F;
+        }
+
+        for (int i = 0; i < this.armor.getSizeInventory(); ++i){
+        	ItemStack stack = armor.getStackInSlot(i);
+            if (stack != null && stack.getItem() instanceof ItemArmor){
+            	stack.damageItem((int)damage, this);
+
+                if (stack.stackSize == 0){
+                    armor.setInventorySlotContents(i, null);
+                }
+            }
+        }
     }
 
 	@Override
@@ -304,11 +429,21 @@ public class EntityTurtle extends EntityTameable {
 	
 	@Override
     public boolean interact(EntityPlayer player){
-		if(isMining())
+		EntityLivingBase owner = getOwner();
+		if(isMining() || owner != null && player != owner)
 			return false;
+		if(owner != null && player.isSneaking()){
+			PlayerData data = (PlayerData) player.getExtendedProperties("TurtlePlayerData");
+			if(data == null)
+				player.registerExtendedProperties("TurtlePlayerData", data = new PlayerData());
+			data.turtle = this;
+			player.openGui(Turtle.Instance, 0, worldObj, 0, 0, 0);
+			
+			return true;
+		}
         ItemStack itemstack = player.inventory.getCurrentItem();
         if(!isTamed()){
-        	if(itemstack.getItem() == Items.fish){
+        	if(itemstack != null && itemstack.getItem() == Items.fish){
                 if (!player.capabilities.isCreativeMode)
                     --itemstack.stackSize;
                 if (itemstack.stackSize <= 0)
@@ -321,8 +456,8 @@ public class EntityTurtle extends EntityTameable {
                         this.setPathToEntity((PathEntity)null);
                         this.setAttackTarget((EntityLivingBase)null);
                         this.aiSit.setSitting(true);
-                        this.setHealth(20.0F);
-                        this.setOwner(player.getCommandSenderName());
+                        this.setHealth(50.0F);
+                        this.func_152115_b(player.getUniqueID().toString());
                         this.playTameEffect(true);
                         this.worldObj.setEntityState(this, (byte)7);
                     }
@@ -336,7 +471,7 @@ public class EntityTurtle extends EntityTameable {
                 return true;
         	}
         }
-        else if (player.getCommandSenderName().equalsIgnoreCase(this.getOwnerName()) && !this.worldObj.isRemote){
+        else if (player.getUniqueID().toString().equalsIgnoreCase(this.func_152113_b()) && !this.worldObj.isRemote){
         	if(itemstack != null && (itemstack.getItem() instanceof ItemSword || itemstack.getItem() instanceof ItemPickaxe || itemstack.getItem() == Items.fish)){
         		ItemStack item = getHeldItem();
         		
@@ -348,16 +483,6 @@ public class EntityTurtle extends EntityTameable {
         		}
         		if(item != null)
         			this.entityDropItem(item, 1);
-        		if(itemstack.getItem() == Items.fish){
-        			eatingTicks = 80;
-        			wasSitting = isSitting();
-        			if(!wasSitting)
-        				setTurtleSitting(true);
-        		}
-        		if(itemstack.getItem() instanceof ItemPickaxe){
-        			setTurtleSitting(true);
-        			mineTimer = System.currentTimeMillis();
-        		}
         	}
         	else{
         		setTurtleSitting(!this.isSitting());
@@ -384,5 +509,32 @@ public class EntityTurtle extends EntityTameable {
         this.setPathToEntity((PathEntity)null);
         this.setTarget((Entity)null);
         this.setAttackTarget((EntityLivingBase)null);
+	}
+
+	@Override
+	public void writeSpawnData(ByteBuf buffer) {
+		try{
+			NBTTagCompound compound = new NBTTagCompound();
+			compound.setTag("Armor", getArmorNBT());
+			byte[] bytes = CompressedStreamTools.compress(compound);
+			buffer.writeShort((short)bytes.length);
+			buffer.writeBytes(bytes);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+	@Override
+	public void readSpawnData(ByteBuf buffer) {
+		try{
+			byte[] bytes = new byte[buffer.readShort()];
+			buffer.readBytes(bytes);
+			NBTTagCompound compound = CompressedStreamTools.func_152457_a(bytes, new NBTSizeTracker(2097152L));
+			setArmorNBT(compound.getTagList("Armor", 10));
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
 	}
 }

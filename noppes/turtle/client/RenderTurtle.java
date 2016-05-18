@@ -20,10 +20,8 @@ public class RenderTurtle extends RenderBiped{
 	}
 
 	@Override
-    protected void preRenderCallback(EntityLivingBase entity, float par2)
-    {
-        float f1 = 0.6f + entity.getHealth() / entity.getMaxHealth() * 0.4f;
-        GL11.glScalef(f1, f1, f1);
+    protected void preRenderCallback(EntityLivingBase entity, float par2){
+        GL11.glScalef(0.6f, 0.6f, 0.6f);
     }
     
 	@Override
@@ -37,7 +35,7 @@ public class RenderTurtle extends RenderBiped{
     	if(turtle.isMining())
     		return;
     	if(turtle.isSitting())
-    		d1 -= 0.5f;
+    		d1 -= 0.3f;
     	super.doRender(entityliving, d, d1, d2, f, f1);
 	}
 }
